@@ -325,6 +325,11 @@ int tcp_ssl_new_psk_client(struct tcp_pcb *tcp, void *arg, const char* psk_ident
 
   int ret = 0;
 
+  if (pskey == NULL || psk_ident == NULL) {
+    TCP_SSL_DEBUG(" failed\n  !  pre-shared key or identity is NULL\n\n");
+    return -1;
+  }
+
   TCP_SSL_DEBUG("setting the pre-shared key.\n");
   // convert PSK from hex string to binary
   if ((strlen(pskey) & 1) != 0 || strlen(pskey) > 2*MBEDTLS_PSK_MAX_LEN) {
