@@ -28,9 +28,6 @@ extern "C"{
 #include "lwip/inet.h"
 #include "lwip/dns.h"
 #include "lwip/err.h"
-#if ASYNC_TCP_SSL_ENABLED
-#include "tcp_mbedtls.h"
-#endif
 }
 #include "esp_task_wdt.h"
 
@@ -979,8 +976,7 @@ int8_t AsyncClient::_connected(void* pcb, int8_t err){
             bool err = false;
             if (_psk_ident != NULL and _psk != NULL) {
                 err = tcp_ssl_new_psk_client(_pcb, this, _psk_ident, _psk) < 0;
-            }
-            else {
+            } else {
                 err = tcp_ssl_new_client(_pcb, this, _hostname.empty() ? NULL : _hostname.c_str(),
                         _root_ca, _root_ca_len) < 0;
             }
