@@ -10,7 +10,7 @@
 extern esp_err_t _tcp_output4ssl(struct tcp_pcb * pcb, void* client);
 extern esp_err_t _tcp_write4ssl(struct tcp_pcb * pcb, const char* data, size_t size, uint8_t apiflags, void* client);
 
-#if 0
+#if 1
 #define TCP_SSL_DEBUG(...) do { ets_printf("T %s- ", pcTaskGetTaskName(xTaskGetCurrentTaskHandle())); ets_printf(__VA_ARGS__); } while(0)
 #else
 #define TCP_SSL_DEBUG(...)
@@ -324,6 +324,11 @@ int tcp_ssl_new_psk_client(struct tcp_pcb *tcp, void *arg, const char* psk_ident
   //mbedtls_esp_enable_debug_log(&tcp_ssl->ssl_conf, 4); // 4=verbose
 
   int ret = 0;
+
+  if (pskey == NULL || psk_ident == NULL) {
+    TCP_SSL_DEBUG(" failed\n  !  pre-shared key or identity is NULL\n\n");
+    return -1;
+  }
 
   TCP_SSL_DEBUG("setting the pre-shared key.\n");
   // convert PSK from hex string to binary
