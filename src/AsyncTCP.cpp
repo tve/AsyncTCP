@@ -977,11 +977,12 @@ int8_t AsyncClient::_connected(void* pcb, int8_t err){
 #if ASYNC_TCP_SSL_ENABLED
         if(_pcb_secure){
             bool err = false;
-            if(_root_ca) {
+            if (_psk_ident != NULL and _psk != NULL) {
+                err = tcp_ssl_new_psk_client(_pcb, this, _psk_ident, _psk) < 0;
+            }
+            else {
                 err = tcp_ssl_new_client(_pcb, this, _hostname.empty() ? NULL : _hostname.c_str(),
                         _root_ca, _root_ca_len) < 0;
-            } else {
-                err = tcp_ssl_new_psk_client(_pcb, this, _psk_ident, _psk) < 0;
             }
             if (err) {
                 log_e("closing....");
