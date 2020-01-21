@@ -28,6 +28,9 @@ extern "C"{
 #include "lwip/inet.h"
 #include "lwip/dns.h"
 #include "lwip/err.h"
+#if ASYNC_TCP_SSL_ENABLED
+#include "tcp_mbedtls.h"
+#endif
 }
 #include "esp_task_wdt.h"
 
