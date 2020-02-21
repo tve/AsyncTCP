@@ -631,10 +631,12 @@ AsyncClient::~AsyncClient(){
     if(_pcb) {
         _close();
     }
+#if ASYNC_TCP_SSL_ENABLED  
     else
     {
         tcp_ssl_free_by_arg(this);
-    }  
+    }
+#endif  
     _free_closed_slot();
 }
 
