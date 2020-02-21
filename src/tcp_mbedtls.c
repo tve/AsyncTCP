@@ -525,6 +525,52 @@ int tcp_ssl_free(struct tcp_pcb *tcp) {
   return 0;
 }
 
+int tcp_ssl_free_by_arg(void *arg) {
+  TCP_SSL_DEBUG("tcp_ssl_free_by_arg(%x)\n", arg);
+  if(arg == NULL) {
+    return -1;
+  }
+  tcp_ssl_t * item = tcp_ssl_array;
+  if (item) {
+  	  if(item->arg == arg){
+  	  	  TCP_SSL_DEBUG("tcp_ssl_free_by_arg arg found at first place\n");
+  	  	  tcp_ssl_array = tcp_ssl_array->next;
+  	  	  if(item->tcp_pbuf != NULL) {
+  	  	  	  pbuf_free(item->tcp_pbuf);
+  	  	  }
+  	  	  mbedtls_ssl_free(&item->ssl_ctx);
+  	  	  mbedtls_ssl_config_free(&item->ssl_conf);
+  	  	  mbedtls_ctr_drbg_free(&item->drbg_ctx);
+  	  	  mbedtls_entropy_free(&item->entropy_ctx);
+  	  	  free(item);
+  	  	  return 0;
+  	  }
+  	  
+  	  while(item->next && item->next->arg != arg)
+  	  	  item = item->next;
+  	  
+  	  if(item->next == NULL){
+  	  	  TCP_SSL_DEBUG("tcp_ssl_free_by_arg arg not found\n");
+  	  	  return ERR_TCP_SSL_INVALID_CLIENTFD_DATA;//item not found
+  	  }
+  	  tcp_ssl_t * i = item->next;
+  	  item->next = i->next;
+  	  if(i->tcp_pbuf != NULL){
+  	  	  pbuf_free(i->tcp_pbuf);
+  	  }
+  	  mbedtls_ssl_free(&i->ssl_ctx);
+  	  mbedtls_ssl_config_free(&i->ssl_conf);
+  	  mbedtls_ctr_drbg_free(&i->drbg_ctx);
+  	  mbedtls_entropy_free(&i->entropy_ctx);
+  	  free(i);
+  	  
+  	  return 0;
+  } else {
+  	  TCP_SSL_DEBUG("tcp_ssl_free_by_arg array empty\n");
+  	  return 0;
+  }	  
+}
+
 bool tcp_ssl_has(struct tcp_pcb *tcp) {
   return tcp_ssl_get(tcp) != NULL;
 }
