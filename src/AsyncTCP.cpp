@@ -630,7 +630,9 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
 AsyncClient::~AsyncClient(){
     if(_pcb) {
         _close();
-    } else {
+    }
+    else
+    {
         tcp_ssl_free_by_arg(this);
     }  
     _free_closed_slot();
