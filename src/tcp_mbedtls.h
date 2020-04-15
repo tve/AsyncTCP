@@ -37,6 +37,7 @@ int tcp_ssl_write(struct tcp_pcb *tcp, uint8_t *data, size_t len);
 int tcp_ssl_read(struct tcp_pcb *tcp, struct pbuf *p);
 int tcp_ssl_handshake_step(struct tcp_pcb *tcp);
 int tcp_ssl_free(struct tcp_pcb *tcp);
+int tcp_ssl_free_by_arg(void * arg);
 bool tcp_ssl_has(struct tcp_pcb *tcp);
 void tcp_ssl_arg(struct tcp_pcb *tcp, void * arg);
 void tcp_ssl_data(struct tcp_pcb *tcp, tcp_ssl_data_cb_t arg);
