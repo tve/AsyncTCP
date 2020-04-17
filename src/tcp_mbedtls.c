@@ -10,7 +10,7 @@
 extern esp_err_t _tcp_output4ssl(struct tcp_pcb * pcb, void* client);
 extern esp_err_t _tcp_write4ssl(struct tcp_pcb * pcb, const char* data, size_t size, uint8_t apiflags, void* client);
 
-#if 0
+#if 1
 #define TCP_SSL_DEBUG(...) do { ets_printf("T %s- ", pcTaskGetTaskName(xTaskGetCurrentTaskHandle())); ets_printf(__VA_ARGS__); } while(0)
 #else
 #define TCP_SSL_DEBUG(...)
@@ -61,13 +61,17 @@ struct tcp_ssl_pcb {
   struct tcp_pcb *tcp;
   int fd;
   mbedtls_ssl_context ssl_ctx;
+  bool has_ssl_conf;
   mbedtls_ssl_config ssl_conf;
-  mbedtls_x509_crt ca_cert;
   bool has_ca_cert;
-  mbedtls_x509_crt client_cert;
+  mbedtls_x509_crt ca_cert;
   bool has_client_cert;
+  mbedtls_x509_crt client_cert;
+  bool has_client_key;
   mbedtls_pk_context client_key;
+  bool has_drbg_ctx;
   mbedtls_ctr_drbg_context drbg_ctx;
+  bool has_entropy_ctx;
   mbedtls_entropy_context entropy_ctx;
   uint8_t type;
   // int handshake;
@@ -191,6 +195,10 @@ tcp_ssl_t * tcp_ssl_new(struct tcp_pcb *tcp, void* arg) {
   new_item->next = NULL;
   new_item->has_ca_cert = false;
   new_item->has_client_cert = false;
+  new_item->has_client_key = false;
+  new_item->has_entropy_ctx = false;
+  new_item->has_ssl_conf = false;
+  new_item->has_drbg_ctx = false;
 
   if(tcp_ssl_array == NULL){
     tcp_ssl_array = new_item;
@@ -236,6 +244,9 @@ int tcp_ssl_new_client(struct tcp_pcb *tcp, void *arg, const char* hostname, con
   mbedtls_ctr_drbg_init(&tcp_ssl->drbg_ctx);
   mbedtls_ssl_init(&tcp_ssl->ssl_ctx);
   mbedtls_ssl_config_init(&tcp_ssl->ssl_conf);
+  tcp_ssl->has_entropy_ctx = true;
+  tcp_ssl->has_drbg_ctx = true;
+  tcp_ssl->has_ssl_conf = true;
   if(root_ca != NULL) {
     mbedtls_x509_crt_init(&tcp_ssl->ca_cert);
     tcp_ssl->has_ca_cert = true;
@@ -244,6 +255,7 @@ int tcp_ssl_new_client(struct tcp_pcb *tcp, void *arg, const char* hostname, con
     mbedtls_x509_crt_init(&tcp_ssl->client_cert);
     mbedtls_pk_init(&tcp_ssl->client_key);
     tcp_ssl->has_client_cert = true;
+    tcp_ssl->has_client_key = true;
   }
 
   mbedtls_ctr_drbg_seed(&tcp_ssl->drbg_ctx, mbedtls_entropy_func,
@@ -326,6 +338,141 @@ int tcp_ssl_new_client(struct tcp_pcb *tcp, void *arg, const char* hostname, con
   return ERR_OK;
 }
 
+int tcp_ssl_new_server(struct tcp_pcb *tcp, void *arg, const char *cert, const size_t cert_len, const char *private_key, const size_t private_key_len, const char *password) {
+  tcp_ssl_t* tcp_ssl;
+
+  if(tcp == NULL) {
+    return -1;
+  }
+
+  if(tcp_ssl_get(tcp) != NULL){
+    return -1;
+  }
+
+  tcp_ssl = tcp_ssl_new(tcp, arg);
+  if(tcp_ssl == NULL){
+    return -1;
+  }
+
+  int ret;
+  mbedtls_ssl_init( &tcp_ssl->ssl_ctx );
+  mbedtls_ssl_config_init( &tcp_ssl->ssl_conf );
+  mbedtls_x509_crt_init( &tcp_ssl->ca_cert );
+  mbedtls_pk_init( &tcp_ssl->client_key );
+  mbedtls_entropy_init( &tcp_ssl->entropy_ctx );
+  mbedtls_ctr_drbg_init( &tcp_ssl->drbg_ctx );
+
+  tcp_ssl->has_entropy_ctx = true;
+  tcp_ssl->has_ssl_conf = true;
+  tcp_ssl->has_ca_cert = true;
+  tcp_ssl->has_client_key = true;
+  tcp_ssl->has_drbg_ctx = true;
+
+  /*
+    * 1. Load the certificates and private RSA key
+    */
+  TCP_SSL_DEBUG("Loading the server cert\n");
+  ret = mbedtls_x509_crt_parse(&tcp_ssl->ca_cert, (const unsigned char *) cert, cert_len);
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed loading server cert, returned %d\n", ret);
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  TCP_SSL_DEBUG("Loading the server key\n");
+  ret = mbedtls_pk_parse_key(&tcp_ssl->client_key, (const unsigned char *) private_key, private_key_len, NULL, 0);
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed loading server private key, returned %d\n", ret); 
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  /*
+    * 3. Seed the RNG
+    */
+  TCP_SSL_DEBUG("Seeding the random number generator...\n" );
+  ret = mbedtls_ctr_drbg_seed(&tcp_ssl->drbg_ctx, mbedtls_entropy_func, &tcp_ssl->entropy_ctx,
+                              (const unsigned char *) pers,
+                              sizeof(pers));
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed seeding the random number generator, returned %d\n", ret);
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  /*
+    * 4. Setup stuff
+    */
+  TCP_SSL_DEBUG("Setting up the SSL data...\n" );
+  ret = mbedtls_ssl_config_defaults( &tcp_ssl->ssl_conf,
+                  MBEDTLS_SSL_IS_SERVER,
+                  MBEDTLS_SSL_TRANSPORT_STREAM,
+                  MBEDTLS_SSL_PRESET_DEFAULT );
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed mbedtls_ssl_config_defaults returned %d\n", ret);
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  mbedtls_ssl_conf_rng(&tcp_ssl->ssl_conf, mbedtls_ctr_drbg_random, &tcp_ssl->drbg_ctx);
+
+
+  mbedtls_ssl_conf_ca_chain(&tcp_ssl->ssl_conf, tcp_ssl->ca_cert.next, NULL);
+  ret = mbedtls_ssl_conf_own_cert(&tcp_ssl->ssl_conf, &tcp_ssl->ca_cert, &tcp_ssl->client_key);
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed mbedtls_ssl_conf_own_cert returned %d\n", ret);
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  ret = mbedtls_ssl_setup(&tcp_ssl->ssl_ctx, &tcp_ssl->ssl_conf);
+  if (ret != 0) {
+      TCP_SSL_DEBUG("failed mbedtls_ssl_setup returned %d\n", ret);
+      tcp_ssl_free(tcp);
+      return handle_error(ret);
+  }
+
+  TCP_SSL_DEBUG("tcp_ssl_new_server completed succesfully\n");
+
+  return ERR_OK;
+}
+
+int tcp_ssl_new_server_client(struct tcp_pcb *tcp, void *arg, struct tcp_pcb *server_tcp) {
+  tcp_ssl_t* tcp_ssl;
+  tcp_ssl_t* server_tcp_ssl;
+
+  if(tcp == NULL || server_tcp == NULL) {
+    return -1;
+  }
+
+  if(tcp_ssl_get(tcp) != NULL){
+    return -1;
+  }
+
+  server_tcp_ssl = tcp_ssl_get(server_tcp);
+  if (server_tcp_ssl == NULL) {
+    return -1;
+  }
+
+  tcp_ssl = tcp_ssl_new(tcp, arg);
+  if(tcp_ssl == NULL){
+    return -1;
+  }
+
+  int ret;
+
+  mbedtls_ssl_init(&tcp_ssl->ssl_ctx);
+  ret = mbedtls_ssl_setup(&tcp_ssl->ssl_ctx, &server_tcp_ssl->ssl_conf);
+  if (ret != 0) {
+    TCP_SSL_DEBUG("failed: mbedtls_ssl_setup returned -0x%04x\n", -ret );
+    return handle_error(ret);
+  }
+
+  mbedtls_ssl_set_bio(&tcp_ssl->ssl_ctx, (void*)tcp_ssl, tcp_ssl_send, tcp_ssl_recv, NULL);
+
+  return ERR_OK;
+}
+
 // Open an SSL connection using a PSK (pre-shared-key) cipher suite.
 int tcp_ssl_new_psk_client(struct tcp_pcb *tcp, void *arg, const char* psk_ident, const char* pskey) {
   tcp_ssl_t* tcp_ssl;
@@ -351,6 +498,10 @@ int tcp_ssl_new_psk_client(struct tcp_pcb *tcp, void *arg, const char* psk_ident
   mbedtls_ctr_drbg_init(&tcp_ssl->drbg_ctx);
   mbedtls_ssl_init(&tcp_ssl->ssl_ctx);
   mbedtls_ssl_config_init(&tcp_ssl->ssl_conf);
+
+  tcp_ssl->has_entropy_ctx = true;
+  tcp_ssl->has_ssl_conf = true;
+  tcp_ssl->has_drbg_ctx = true;
 
   mbedtls_ctr_drbg_seed(&tcp_ssl->drbg_ctx, mbedtls_entropy_func,
                         &tcp_ssl->entropy_ctx, (const uint8_t*)pers, sizeof(pers));
@@ -526,7 +677,22 @@ int tcp_ssl_read(struct tcp_pcb *tcp, struct pbuf *p) {
 
   tcp_ssl->tcp_pbuf = NULL;
 
+  TCP_SSL_DEBUG("tcp_ssl_read: return total_bytes: %d\r\n", total_bytes >= 0 ? 0 : total_bytes);
   return total_bytes >= 0 ? 0 : total_bytes; // return error code
+}
+
+int tcp_ssl_handshake_step(struct tcp_pcb *tcp) {
+  TCP_SSL_DEBUG("tcp_ssl_handshake_step(%x)\n", tcp);
+  if(tcp == NULL) {
+    return -1;
+  }
+
+  tcp_ssl_t * tcp_ssl = tcp_ssl_get(tcp);
+  if(tcp_ssl == NULL){
+    return 0;
+  }
+
+  return ERR_OK;
 }
 
 int tcp_ssl_free(struct tcp_pcb *tcp) {
@@ -535,42 +701,48 @@ int tcp_ssl_free(struct tcp_pcb *tcp) {
     return -1;
   }
   tcp_ssl_t * item = tcp_ssl_array;
-  if(item->tcp == tcp){
-    tcp_ssl_array = tcp_ssl_array->next;
-    if(item->tcp_pbuf != NULL) {
-      pbuf_free(item->tcp_pbuf);
-    }
-    mbedtls_ssl_free(&item->ssl_ctx);
-    mbedtls_ssl_config_free(&item->ssl_conf);
-    mbedtls_ctr_drbg_free(&item->drbg_ctx);
-    mbedtls_entropy_free(&item->entropy_ctx);
-    if(item->has_ca_cert) {
-      mbedtls_x509_crt_free(&item->ca_cert);
-    }
-    if (item->has_client_cert) {
-      mbedtls_x509_crt_free(&item->client_cert);
-      mbedtls_pk_free(&item->client_key);
-    }
-    free(item);
-    return 0;
-  }
-
-  while(item->next && item->next->tcp != tcp)
-    item = item->next;
-
-  if(item->next == NULL){
+  if (item == NULL) {
     return ERR_TCP_SSL_INVALID_CLIENTFD_DATA;//item not found
   }
-  tcp_ssl_t * i = item->next;
-  item->next = i->next;
-  if(i->tcp_pbuf != NULL){
-    pbuf_free(i->tcp_pbuf);
+  
+  if (item->tcp == tcp) {
+    tcp_ssl_array = tcp_ssl_array->next;
+  } else {
+    while(item->next && item->next->tcp != tcp)
+      item = item->next;
+    
+    if(item->next == NULL || item->next->tcp != tcp){
+      return ERR_TCP_SSL_INVALID_CLIENTFD_DATA;//item not found
+    }
+
+    tcp_ssl_t * thisItem = item->next;
+    item->next = item->next->next;
+    item = thisItem;
   }
-  mbedtls_ssl_free(&i->ssl_ctx);
-  mbedtls_ssl_config_free(&i->ssl_conf);
-  mbedtls_ctr_drbg_free(&i->drbg_ctx);
-  mbedtls_entropy_free(&i->entropy_ctx);
-  free(i);
+
+  if(item->tcp_pbuf != NULL) {
+    pbuf_free(item->tcp_pbuf);
+  }
+  mbedtls_ssl_free(&item->ssl_ctx);
+  if(item->has_ssl_conf) {
+    mbedtls_ssl_config_free(&item->ssl_conf);
+  }
+  if(item->has_drbg_ctx) {
+    mbedtls_ctr_drbg_free(&item->drbg_ctx);
+  }
+  if(item->has_entropy_ctx) {
+    mbedtls_entropy_free(&item->entropy_ctx);
+  }
+  if(item->has_ca_cert) {
+    mbedtls_x509_crt_free(&item->ca_cert);
+  }
+  if (item->has_client_cert) {
+    mbedtls_x509_crt_free(&item->client_cert);
+  }
+  if (item->has_client_key) {
+    mbedtls_pk_free(&item->client_key);
+  }
+  free(item);
 
   return 0;
 }
@@ -593,10 +765,10 @@ void tcp_ssl_data(struct tcp_pcb *tcp, tcp_ssl_data_cb_t arg){
   }
 }
 
-void tcp_ssl_handshake(struct tcp_pcb *tcp, tcp_ssl_handshake_cb_t arg){
+void tcp_ssl_handshake(struct tcp_pcb *tcp, tcp_ssl_handshake_cb_t ssl_handshake_cb){
   tcp_ssl_t * item = tcp_ssl_get(tcp);
   if(item) {
-    item->on_handshake = arg;
+    item->on_handshake = ssl_handshake_cb;
   }
 }
 

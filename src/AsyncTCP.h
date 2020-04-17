@@ -58,9 +58,17 @@ typedef std::function<void(void*, AsyncClient*, uint32_t time)> AcTimeoutHandler
 struct tcp_pcb;
 struct ip_addr;
 
+class AsyncServer;
+
 class AsyncClient {
   public:
+  friend class AsyncServer;
+
+#if ASYNC_TCP_SSL_ENABLED
+    AsyncClient(tcp_pcb* pcb = 0, tcp_pcb* server_pcb = 0);
+#else
     AsyncClient(tcp_pcb* pcb = 0);
+#endif
     ~AsyncClient();
 
     AsyncClient & operator=(const AsyncClient &other);
@@ -236,9 +244,8 @@ class AsyncServer {
     ~AsyncServer();
     void onClient(AcConnectHandler cb, void* arg);
 #if ASYNC_TCP_SSL_ENABLED
-    // Dummy, so it compiles with ESP Async WebServer library enabled.
     void onSslFileRequest(AcSSlFileHandler cb, void* arg) {};
-    void beginSecure(const char *cert, const char *private_key_file, const char *password) {};
+    void beginSecure(const char *cert, const char *private_key_file, const char *password);
 #endif
     void begin();
     void end();
@@ -257,6 +264,9 @@ class AsyncServer {
     tcp_pcb* _pcb;
     AcConnectHandler _connect_cb;
     void* _connect_cb_arg;
+#if ASYNC_TCP_SSL_ENABLED
+    bool _secure;
+#endif
 
     int8_t _accept(tcp_pcb* newpcb, int8_t err);
     int8_t _accepted(AsyncClient* client);
